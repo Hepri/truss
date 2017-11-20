@@ -41,3 +41,7 @@ testclean:
 	$(MAKE) -C cmd/_integration-tests clean
 
 .PHONY: testclean test-integration test-go test truss gobindata dependencies
+
+build_example: default
+	mkdir -p ./_example/dates-service
+	$(GOPATH)/bin/truss ./_example/dates.proto

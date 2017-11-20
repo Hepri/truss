@@ -1,0 +1,70 @@
+package datastore
+
+import (
+	// External Imports
+	"bitbucket.org/linced/go-helpers/connections/mongo"
+	ds "bitbucket.org/linced/go-helpers/datastore"
+	log "github.com/sirupsen/logrus"
+	"gopkg.in/mgo.v2"
+)
+
+const DefaultMongoPrefix = "{{.Service.Name}}"
+
+// NewMongoStore allows for custom mongo configuration and custom hashers.
+func NewMongoStore(prefix string) (*MongoStore, error) {
+	if prefix == "" {
+		prefix = DefaultMongoPrefix
+	}
+	// Connect to Mongo and gain a session - configured via envvars.
+	session, dbName, err := mongo.GetMongoSession(prefix)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"package": "datastore",
+			"method":  "NewMongoStore",
+			"error":   err.Error(),
+		}).Error("datastore error")
+		return nil, err
+	}
+
+	// Use the Configured Database for Schools
+	dbInstance := session.DB(dbName)
+
+	// Initialize and bind all collection handlers into the datastore struct
+	managerInstance := &mongoManager{
+		DB: dbInstance,
+	}
+
+	// Init Database collections, indices e.t.c.
+	managers := []ds.Configurer{
+		managerInstance,
+	}
+	for _, manager := range managers {
+		manager.Configure()
+	}
+
+	// Return the configured datastore
+	return &MongoStore{
+		DB: dbInstance,
+
+		// School Database API
+		Manager: managerInstance,
+	}, nil
+}
+
+// MongoStore composes all stores into the one datastore to rule them all
+type MongoStore struct {
+	// DB is the Mongo connection that holds the base session that can be copied and closed.
+	DB *mgo.Database
+
+	// Bind all resource managers here for access to various functions.
+	Manager *mongoManager
+
+	// Cache Stores
+	// - *cache.MemoryManager
+}
+
+// NewSession returns a mongo session.
+// Note: The session requires closing manually so no memory leaks occur.
+func (m *MongoStore) NewSession() (session *mgo.Session) {
+	return m.DB.Session.Copy()
+}

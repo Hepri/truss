@@ -1,0 +1,285 @@
+package datastore
+
+import (
+	pb "{{.PBImportPath -}}"
+	ds "bitbucket.org/linced/go-helpers/datastore"
+	"github.com/pborman/uuid"
+	log "github.com/sirupsen/logrus"
+	"gopkg.in/mgo.v2"
+	"gopkg.in/mgo.v2/bson"
+)
+
+// Verify that *T implements I.
+var _ {{.Service.Name}}Manager = (*mongoManager)(nil)
+var _ ds.Configurer = (*mongoManager)(nil)
+
+// mongoManager manages the database layer
+type mongoManager struct {
+	DB *mgo.Database
+}
+
+{{range $i := .DataStoreTypes}}
+func (g *mongoManager) configure{{ $i.Name}}() {
+	c := g.DB.C(Collection{{ $i.Name}}).With(g.DB.Session.Clone())
+	defer c.Database.Session.Close()
+
+	// Ensure Id index on dates
+	index := mgo.Index{
+		Key:        []string{"id"},
+		Unique:     true,
+		DropDups:   true,
+		Background: true,
+		Sparse:     true,
+	}
+
+	err := c.EnsureIndex(index)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"package": "datastore",
+			"method":  "configure{{ $i.Name}}",
+			"struct":  "mongoManager",
+			"error":   err.Error(),
+		}).Error("datastore index error")
+		panic(err)
+	}
+
+	// extra index for schoolId for faster list search
+	index = mgo.Index{
+		Key:        []string{"id", "schoolid"},
+		Unique:     true,
+		DropDups:   true,
+		Background: true,
+		Sparse:     true,
+	}
+
+	err = c.EnsureIndex(index)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"package": "datastore",
+			"method":  "configure{{ $i.Name}}",
+			"struct":  "mongoManager",
+			"error":   err.Error(),
+		}).Error("datastore index error")
+		panic(err)
+	}
+}
+{{- end}}
+
+func (g *mongoManager) Configure() {
+    {{range $i := .DataStoreTypes}}
+    g.configure{{ $i.Name}}()
+    {{- end}}
+}
+
+{{range $i := .DataStoreTypes}}
+// getConcrete{{ $i.Name}} obtains a concrete {{ $i.Name}} resource.
+func (g *mongoManager) getConcrete{{ $i.Name}}(sess *mgo.Session{{ if $i.HasSchoolId }}, schoolId{{ end }}, id string) (result pb.{{ $i.Name}}, err error) {
+	// Copy a new DB session if none specified
+	if sess == nil {
+		sess = g.DB.Session.Copy()
+		defer sess.Close()
+	}
+
+	result = pb.{{ $i.Name}}{}
+	query := bson.M{"id": id}
+	{{ if $i.HasSchoolId }}
+	if schoolId != "" {
+		query["schoolid"] = schoolId
+	}
+	{{ end }}
+
+	c := g.DB.C(Collection{{ $i.Name}}).With(sess)
+	if err := c.Find(query).One(&result); err != nil {
+		if err == mgo.ErrNotFound {
+			log.WithFields(log.Fields{
+				"package": "datastore",
+				"method":  "getConcrete{{ $i.Name}}",
+				"error":   err.Error(),
+			}).Debug("datastore record not found")
+			return result, Err{{ $i.Name}}NotFound
+		}
+
+		log.WithFields(log.Fields{
+			"package": "datastore",
+			"method":  "getConcrete{{ $i.Name}}",
+			"error":   err.Error(),
+		}).Error("datastore error")
+		return result, err
+	}
+	return result, nil
+}
+
+func (g *mongoManager) List{{ $i.Name}}(sess *mgo.Session{{ if $i.HasSchoolId }}, schoolId string{{ end }}) (results []*pb.{{ $i.Name}}, err error) {
+	// Copy a new DB session if none specified
+	if sess == nil {
+		sess = g.DB.Session.Copy()
+		defer sess.Close()
+	}
+
+	// Filter Query
+	q := bson.M{}
+	{{ if $i.HasSchoolId }}
+	if schoolId != "" {
+		q["schoolid"] = schoolId
+	}
+	{{ end }}
+
+	c := g.DB.C(Collection{{ $i.Name}}).With(sess)
+	err = c.Find(q).All(&results)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"package": "datastore",
+			"method":  "List{{ $i.Name}}",
+			"error":   err.Error(),
+		}).Error("datastore error")
+		return nil, err
+	}
+	return results, nil
+}
+
+func (g *mongoManager) Create{{ $i.Name}}(sess *mgo.Session, p pb.{{ $i.Name}}) (result pb.{{ $i.Name}}, err error) {
+	// Copy a new DB session if none specified
+	if sess == nil {
+		sess = g.DB.Session.Copy()
+		defer sess.Close()
+	}
+
+	// Allow for duplicate groups, it's the user's responsibility to manage their mess
+	// Enable overriding UUIds
+	if p.Id == "" {
+		p.Id = uuid.New()
+	}
+
+	c := g.DB.C(Collection{{ $i.Name}}).With(sess)
+	err = c.Insert(p)
+	if err != nil {
+		if mgo.IsDup(err) {
+			log.WithFields(log.Fields{
+				"collection": Collection{{ $i.Name}},
+				"package":    "datastore",
+				"method":     "Create{{ $i.Name}}",
+				"error":      err.Error(),
+			}).Debug("datastore record exists")
+			return result, ErrDateExists
+		}
+
+		log.WithFields(log.Fields{
+			"collection": Collection{{ $i.Name}},
+			"package":    "datastore",
+			"method":     "Create{{ $i.Name}}",
+			"error":      err.Error(),
+		}).Error("datastore error")
+		return result, err
+	}
+
+	return p, nil
+}
+
+func (g *mongoManager) Get{{ $i.Name}}(sess *mgo.Session{{ if $i.HasSchoolId }}, schoolId{{ end }}, id string) (result pb.{{ $i.Name}}, err error) {
+	// Copy a new DB session if none specified
+	if sess == nil {
+		sess = g.DB.Session.Copy()
+		defer sess.Close()
+	}
+
+	result, err = g.getConcrete{{ $i.Name}}(sess{{ if $i.HasSchoolId }}, schoolId{{ end }}, id)
+	if err != nil {
+		if err == Err{{ $i.Name}}NotFound {
+			log.WithFields(log.Fields{
+				"collection": Collection{{ $i.Name}},
+				"package":    "datastore",
+				"method":     "Get{{ $i.Name}}",
+				"error":      err.Error(),
+			}).Debug("datastore record not found")
+			return result, err
+		}
+
+		log.WithFields(log.Fields{
+			"collection": Collection{{ $i.Name}},
+			"package":    "datastore",
+			"method":     "Get{{ $i.Name}}",
+			"error":      err.Error(),
+		}).Error("datastore error")
+		return result, err
+	}
+	return result, nil
+}
+
+func (g *mongoManager) Update{{ $i.Name}}(sess *mgo.Session{{ if $i.HasSchoolId }}, schoolId {{ end }}, id string, p pb.{{ $i.Name}}) (result pb.{{ $i.Name}}, err error) {
+	// Copy a new DB session if none specified
+	if sess == nil {
+		sess = g.DB.Session.Copy()
+		defer sess.Close()
+	}
+
+	selector := bson.M{"id": id}
+	{{ if $i.HasSchoolId }}
+	if schoolId != "" {
+		selector["schoolid"] = schoolId
+
+		p.SchoolId = schoolId
+	}
+	{{ end }}
+	// Deny updating a group's Id
+	p.Id = id
+
+	c := g.DB.C(Collection{{ $i.Name}}).With(sess)
+	if err := c.Update(selector, p); err != nil {
+		if err == mgo.ErrNotFound {
+			log.WithFields(log.Fields{
+				"collection": Collection{{ $i.Name}},
+				"package":    "datastore",
+				"method":     "Update{{ $i.Name}}",
+				"error":      err.Error(),
+			}).Debug("datastore record not found")
+			return result, Err{{ $i.Name}}NotFound
+		}
+
+		log.WithFields(log.Fields{
+			"collection": Collection{{ $i.Name}},
+			"package":    "datastore",
+			"method":     "Update{{ $i.Name}}",
+			"error":      err.Error(),
+		}).Error("datastore error")
+		return result, err
+	}
+	return p, nil
+}
+
+func (g *mongoManager) Delete{{ $i.Name}}(sess *mgo.Session{{ if $i.HasSchoolId }}, schoolId{{ end }}, id string) error {
+	// Copy a new DB session if none specified
+	if sess == nil {
+		sess = g.DB.Session.Copy()
+		defer sess.Close()
+	}
+
+	q := bson.M{"id": id}
+	{{ if $i.HasSchoolId }}
+	if schoolId != "" {
+		q["schoolid"] = schoolId
+	}
+	{{ end }}
+
+	c := g.DB.C(Collection{{ $i.Name}}).With(sess)
+	if err := c.Remove(q); err != nil {
+		if err == mgo.ErrNotFound {
+			log.WithFields(log.Fields{
+				"collection": Collection{{ $i.Name}},
+				"package":    "datastore",
+				"method":     "Update{{ $i.Name}}",
+				"error":      err.Error(),
+			}).Debug("datastore record not found")
+			return Err{{ $i.Name}}NotFound
+		}
+
+		log.WithFields(log.Fields{
+			"collection": Collection{{ $i.Name}},
+			"package":    "datastore",
+			"method":     "Update{{ $i.Name}}",
+			"error":      err.Error(),
+		}).Error("datastore error")
+		return err
+	}
+	return nil
+}
+{{- end}}

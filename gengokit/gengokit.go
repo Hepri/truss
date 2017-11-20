@@ -44,8 +44,9 @@ type Data struct {
 	// PackageName is the name of the package containing the service definition
 	PackageName string
 	// GRPC/Protobuff service, with all parameters and return values accessible
-	Service    *svcdef.Service
-	ClientArgs *clientarggen.ClientServiceArgs
+	Service        *svcdef.Service
+	DataStoreTypes []*DataStoreType
+	ClientArgs     *clientarggen.ClientServiceArgs
 	// A helper struct for generating http transport functionality.
 	HTTPHelper *httptransport.Helper
 	FuncMap    template.FuncMap
@@ -56,15 +57,16 @@ type Data struct {
 
 func NewData(sd *svcdef.Svcdef, conf Config) (*Data, error) {
 	return &Data{
-		ImportPath:   conf.GoPackage,
-		PBImportPath: conf.PBPackage,
-		PackageName:  sd.PkgName,
-		Service:      sd.Service,
-		ClientArgs:   clientarggen.New(sd.Service),
-		HTTPHelper:   httptransport.NewHelper(sd.Service),
-		FuncMap:      FuncMap,
-		Version:      conf.Version,
-		VersionDate:  conf.VersionDate,
+		ImportPath:     conf.GoPackage,
+		PBImportPath:   conf.PBPackage,
+		PackageName:    sd.PkgName,
+		Service:        sd.Service,
+		DataStoreTypes: getDataStoreTypes(sd.Messages),
+		ClientArgs:     clientarggen.New(sd.Service),
+		HTTPHelper:     httptransport.NewHelper(sd.Service),
+		FuncMap:        FuncMap,
+		Version:        conf.Version,
+		VersionDate:    conf.VersionDate,
 	}, nil
 }
 
@@ -88,4 +90,33 @@ func ApplyTemplate(templ string, templName string, data interface{}, funcMap tem
 	}
 
 	return outputBuffer, nil
+}
+
+type DataStoreType struct {
+	Name        string
+	HasSchoolId bool
+}
+
+func getDataStoreTypes(arr []*svcdef.Message) []*DataStoreType {
+	filtered := make([]*DataStoreType, 0)
+	for _, m := range arr {
+		isReq := strings.HasSuffix(m.Name, "Request")
+		isResp := strings.HasSuffix(m.Name, "Response")
+		isEmpty := m.Name == "Empty"
+		if !(isReq || isResp || isEmpty) {
+			var hasSchoolId bool
+			for _, f := range m.Fields {
+				if strings.ToLower(f.Name) == "schoolid" {
+					hasSchoolId = true
+					break
+				}
+			}
+
+			filtered = append(filtered, &DataStoreType{
+				Name:        m.Name,
+				HasSchoolId: hasSchoolId,
+			})
+		}
+	}
+	return filtered
 }

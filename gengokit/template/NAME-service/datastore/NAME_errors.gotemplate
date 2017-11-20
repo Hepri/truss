@@ -1,0 +1,17 @@
+package datastore
+
+import (
+	"errors"
+)
+
+var (
+	{{range $i := .DataStoreTypes}}
+	    // {{ $i.Name }} errors
+	    // 404 - Not Found
+	    Err{{ $i.Name }}NotFound = errors.New("{{ ToLower $i.Name }} not found")
+
+    	// 409 - Conflict
+    	Err{{ $i.Name }}Exists = errors.New("{{ ToLower $i.Name }} already exists")
+
+    {{- end}}
+)
